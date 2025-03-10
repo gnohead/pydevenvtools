@@ -10,12 +10,25 @@
 # ```
 #
 
-# 환경 변수 설정
-verstr=3.11
+
+platform=$(uname)
+if [[ ${platform} == "Darwin" ]]; then
+    pyexec="python3.13"
+else
+    pyexec="python3"
+fi
+
+verstr=$(${pyexec} --version | sed -E 's/Python ([0-9]+\.[0-9]+)\.[0-9]+/\1/')
+
+echo "> The current system has '$pyexec ( $verstr )'"
 
 cwd=$(pwd)
 vernum=$(echo "${verstr}" | sed "s/\.//g")
-pypath=$(whereis python${verstr} | awk '{print $2}')
+if [[ ${platform} == "Darwin" ]]; then
+    pypath=$(whereis python${verstr} | awk '{print $2}')
+else
+    pypath=$(whereis python${verstr} | awk '{print $NF}')
+fi
 venvpath="${cwd}/_py$(echo "${vernum}")_"
 reqfile="${cwd}/requirements.txt"
 ignorefile="${cwd}/.gitignore"
@@ -43,7 +56,7 @@ function activate_env() {
     (
         # 환경 진입
         source "${venvpath}/bin/activate"
-        export PYTHONPATH="$PYTHONPATH:${cwd}"
+        # export PYTHONPATH="$PYTHONPATH:${cwd}"
 
         # 환경 변수 로드
         if [ -f "$env_variables" ]; then
@@ -93,13 +106,25 @@ function create_env() {
     fi
 
     if [ ! -d "$venvpath" ]; then
-        ${pypath} -m pip install --upgrade pip && \
-        ${pypath} -m pip install virtualenv && \
+        if [[ ${platform} != "Linux" ]]; then
+            ${pypath} -m pip install --upgrade pip --break-system-packages && \
+            ${pypath} -m pip install --break-system-packages virtualenv
+        fi
+
+        # virtualenv 모듈이 없을 때 설치
+        if ! ${pypath} -m pip show virtualenv > /dev/null 2>&1; then
+            ${pypath} -m pip install --break-system-packages virtualenv
+        fi
+
         ${pypath} -m virtualenv --python="${pypath}" "${venvpath}"
 
         # 패키지 실행 환경 설정
         if [ $? -eq 0 ]; then
-            activate_env python -m pip install pip --upgrade
+            # 환경 activation 파일에 PYTHONPATH 목록에 현재 작업폴더(cwd)를 추가하기; PYTHONPATH 내용에 현재 작업폴더 있으면 추가 안함
+            activate_file="${venvpath}/bin/activate"
+            if ! grep -q "PYTHONPATH.*${cwd}" "${activate_file}"; then
+                echo "export PYTHONPATH=\$PYTHONPATH:${cwd}" >> "${activate_file}"
+            fi
 
             # requirements.txt 파일이 존재하면 패키지 설치
             if [ -f "${reqfile}" ]; then
@@ -111,11 +136,20 @@ function create_env() {
     fi
 }
 
+function upgrade_requirements() {
+    activate_env pip install --upgrade pip --break-system-packages
+    if [ -f "${reqfile}" ]; then
+        activate_env python -m pip install -r ${reqfile}
+    fi
+}
+
 function usage() {
     echo "Usage: $(basename $0) [create|freeze|purge|clean|test|{command}]"
     echo "  create: Create python environment"
     echo "  recreate: Re-create python environment"
+    echo "  upgrade: Upgrade python requirement packages"
     echo "  freeze: Make requirements.txt file"
+    echo "  activate: Enter the virtual environment shell"
     echo "  purge: Remove virtual environment and unnecessary files"
     echo "  clean: Remove unnecessary files"
     echo "  test: run pytest"
@@ -134,6 +168,9 @@ elif [ "$1" = "recreate" ]; then
     # 현재 가상환경 삭제하고 새로 생성
     rm -rfv "${venvpath}"
     create_env
+
+elif [ "$1" = "upgrade" ]; then
+    upgrade_requirements
 
 elif [ "$1" = "freeze" ]; then
     activate_env python -m pip freeze > ${reqfile}
@@ -159,6 +196,13 @@ elif [ "$1" = "test" ]; then
 
 elif [ "$1" = "run" ]; then
     run_runlist
+
+elif [ "$1" = "activate" ]; then
+    if [[ ${platform} == "Darwin" ]]; then
+        activate_env /bin/zsh
+    else
+        activate_env /bin/bash
+    fi
 
 elif [ -n "$1" ]; then
     # 환경에서 명령어 실행

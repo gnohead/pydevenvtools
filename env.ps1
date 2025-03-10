@@ -10,6 +10,11 @@
 $cwd = Get-Location
 $pypath = (Get-Command python).Source
 $vernum = $pypath -replace '.*Python(\d+).*', '$1'
+if ($vernum -eq $pypath) {
+    Write-Host "> Either already in the environment or cannot find installed Python3.xx."
+    exit 1
+}
+
 $venvpath = Join-Path $cwd ("_py" + $vernum + "_")
 $reqfile = Join-Path $cwd "requirements.txt"
 $ignorefile = Join-Path $cwd ".gitignore"
@@ -26,18 +31,19 @@ function New-Environment {
         & $pypath -m pip install virtualenv
         & $pypath -m virtualenv --python=$pypath $venvpath
 
-        # 패키지 실행 환경 설정
-        if ($LASTEXITCODE -eq 0) {
-            Invoke-Expression "$venvpath\Scripts\activate.ps1"
-            & python -m pip install pip --upgrade
+        # "$venvpath\Scripts\activate.ps1"에 환경변수 PYTHONPATH 에 현재 작업폴더 루트를 추가하는 구문을 삽입
+        Add-Content -Path "$venvpath\Scripts\activate.ps1" -Value 'if (-not $env:PYTHONPATH) { $env:PYTHONPATH = (Get-Location).Path } else { $env:PYTHONPATH = (Get-Location).Path + ";" + $env:PYTHONPATH }'
 
-            # requirements.txt 파일이 존재하면 패키지 설치
-            if (Test-Path $reqfile) {
-                & python -m pip install -r $reqfile
-            }
+        Invoke-Expression "$venvpath\Scripts\activate.ps1"
+        $env:PYTHONPATH = (Get-Location).Path
+        python -m pip install pip --upgrade
 
-            & deactivate
+        # requirements.txt 파일이 존재하면 패키지 설치
+        if (Test-Path $reqfile) {
+            python -m pip install -r $reqfile
         }
+
+        deactivate
     } else {
         Write-Host "$venvpath already exists."
     }
@@ -65,13 +71,25 @@ function Remove-Environment {
 function Enable-Environment {
     # 파이썬 환경에 진입
     Invoke-Expression "$venvpath\Scripts\activate.ps1"
+    & $env:PYTHONPATH = (Get-Location).Path
 }
 
 function Invoke-Command {
     param($commandArgs)
     # 특정 명령어를 파이썬 환경에서 실행
     Invoke-Expression "$venvpath\Scripts\activate.ps1"
+    & $env:PYTHONPATH = (Get-Location).Path
     & Invoke-Expression "$commandArgs"
+    & deactivate
+}
+
+function Update-Requirements {
+    Invoke-Expression "$venvpath\Scripts\activate.ps1"
+    & $env:PYTHONPATH = (Get-Location).Path
+    & python -m pip install --upgrade pip
+    if (Test-Path $reqfile) {
+        & python -m pip install -r $reqfile
+    }
     & deactivate
 }
 
@@ -80,6 +98,8 @@ try {
     if ($args.Count -eq 0) {
         Write-Host "Usage: .\env.ps1 [create|purge|activate|{command}]"
         Write-Host "  create: Create python environment"
+        Write-Host "  recreate: Re-create python environment"
+        Write-Host "  upgrade: Upgrade python requirement packages"
         Write-Host "  purge: Remove virtual environment and unnecessary files"
         Write-Host "  clean: Remove unnecessary files"
         Write-Host "  activate: Activate environment shell"
@@ -92,6 +112,8 @@ try {
     } elseif ($args[0] -eq "purge") {
         Remove-Unnecessary
         Remove-Environment
+    } elseif ($args[0] -eq "upgrade") {
+        Update-Requirements
     } elseif ($args[0] -eq "clean") {
         Remove-Unnecessary
     } elseif ($args[0] -eq "activate") {
